@@ -124,7 +124,7 @@ def run(state: TicketState) -> dict:
         ).strip()
     )
 
-    # Invoke structured LLM
+
     result: ClassificationOutput = structured_llm.invoke(
         [SystemMessage(content=SYSTEM_PROMPT), human_message]
     )
