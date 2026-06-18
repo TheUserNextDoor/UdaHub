@@ -1,67 +1,17 @@
-"""
-agentic/agents/resolver.py
-
-Resolver Agent — the action-taking brain of UDA-Hub.
-
-Responsibilities:
-- Looks up customer context from CultPass (cultpass.db)
-- Retrieves relevant knowledge via RAG (udahub.db knowledge table)
-- Reasons over context and decides how to respond or act
-- Executes tools when needed (refund, reservation cancel, CRM update, etc.)
-- Writes state["resolution"] and state["customer_context"]
-- Returns resolved: True if handled, resolved: False if it cannot confidently act
-  (which triggers re-routing to Escalation via the Supervisor)
-
-Tools (stubbed — will be implemented as FastMCP tools):
-- search_knowledge_base   → kb_tools.py       (ChromaDB RAG retrieval)
-- lookup_customer         → crm_tools.py      (cultpass users + subscriptions)
-- lookup_reservation      → crm_tools.py      (cultpass reservations + experiences)
-- issue_refund            → crm_tools.py      (cultpass refund action)
-- update_ticket_status    → ticket_tools.py   (udahub ticket_metadata)
-- send_response           → ticket_tools.py   (udahub ticket_messages)
-- create_internal_note    → ticket_tools.py   (udahub ticket_messages, role=agent)
-- update_long_term_memory → ticket_tools.py   (memory store)
-"""
-
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
 from textwrap import dedent
+from pydantic import BaseModel, Field
 from data.models.state import TicketState
 
-def _stub(name: str):
-    """Returns a callable stub that identifies itself clearly."""
-    def stub_fn(*args, **kwargs):
-        return f"[STUB] Tool '{name}' not yet implemented. Args: {args} Kwargs: {kwargs}"
-    stub_fn.__name__ = name
-    return stub_fn
-
-# These will be replaced by FastMCP tool instances:
-# from agentic.tools.kb_tools import search_knowledge_base
-# from agentic.tools.crm_tools import lookup_customer, lookup_reservation, issue_refund
-# from agentic.tools.ticket_tools import update_ticket_status, send_response, create_internal_note, update_long_term_memory
-
-search_knowledge_base   = _stub("search_knowledge_base")
-lookup_customer         = _stub("lookup_customer")
-lookup_reservation      = _stub("lookup_reservation")
-issue_refund            = _stub("issue_refund")
-update_ticket_status    = _stub("update_ticket_status")
-send_response           = _stub("send_response")
-create_internal_note    = _stub("create_internal_note")
-update_long_term_memory = _stub("update_long_term_memory")
-
-# Tool registry — what the Resolver is allowed to call
-RESOLVER_TOOLS = [
-    search_knowledge_base,
-    lookup_customer,
-    lookup_reservation,
-    issue_refund,
+from agentic.tools.kb_tools import search_knowledge_base
+from agentic.tools.crm_tools import lookup_customer, lookup_reservation, issue_refund
+from agentic.tools.ticket_tools import (
     update_ticket_status,
     send_response,
     create_internal_note,
     update_long_term_memory,
-]
+)
 
 
 class ResolutionOutput(BaseModel):
@@ -104,19 +54,10 @@ class ResolutionOutput(BaseModel):
     )
 
 
-# ─────────────────────────────────────────────
-# LLM
-# Bound with structured output for resolution decision.
-# Note: tool execution is handled manually in run()
-# until FastMCP tools are wired in.
-# ─────────────────────────────────────────────
+
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 structured_llm = llm.with_structured_output(ResolutionOutput)
 
-
-# ─────────────────────────────────────────────
-# System Prompt
-# ─────────────────────────────────────────────
 SYSTEM_PROMPT = """
 You are the Resolver Agent for UDA-Hub, an intelligent customer support system
 for CultPass — an experiences and subscription platform.
@@ -145,7 +86,6 @@ Escalate (resolved=False) when:
 - Issue involves multiple conflicting reservations
 - Request is outside your tool capabilities
 """
-
 
 def _gather_context(state: TicketState) -> dict:
     """
@@ -184,7 +124,6 @@ def _gather_context(state: TicketState) -> dict:
         context["customer_profile"] = customer
         context["tools_called"].append("lookup_customer")
 
-    # Look up reservations for reservation/refund intents
     if issue_type in {"reservation", "refund"} or "reservation" in intent:
         reservation = lookup_reservation(
             external_user_id=ticket["external_user_id"],
@@ -193,6 +132,8 @@ def _gather_context(state: TicketState) -> dict:
         context["tools_called"].append("lookup_reservation")
 
     return context
+
+
 
 def run(state: TicketState) -> dict:
     """
@@ -213,8 +154,10 @@ def run(state: TicketState) -> dict:
     short_term = state.get("short_term_memory", {})
     long_term = state.get("long_term_memory", {})
 
+    # ── Step 1: Gather context via tools ──
     gathered = _gather_context(state)
 
+    # ── Step 2: Build prompt ──
     human_message = HumanMessage(
         content=dedent(
             f"""
@@ -257,9 +200,7 @@ def run(state: TicketState) -> dict:
         [SystemMessage(content=SYSTEM_PROMPT), human_message]
     )
 
-    # ── Step 4: Execute action tools if resolved ──
     if result.resolved:
-        # Update ticket status to resolved
         update_ticket_status(
             ticket_id=ticket["ticket_id"],
             status="resolved",
@@ -282,7 +223,6 @@ def run(state: TicketState) -> dict:
             "update_long_term_memory",
         ])
 
-    # ── Step 5: Build state updates ──
     resolution = {
         "action_taken": result.action_taken,
         "response_message": result.response_message,
@@ -306,7 +246,5 @@ def run(state: TicketState) -> dict:
         "resolution": resolution,
         "retrieved_context": [gathered["kb_results"]] if gathered["kb_results"] else [],
         "messages": [log_message],
-        # next_agent is set back to supervisor if not resolved,
-        # so supervisor can re-route to escalation
         "next_agent": "end" if result.resolved else "escalation",
     }

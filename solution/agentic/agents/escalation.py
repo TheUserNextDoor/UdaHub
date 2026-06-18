@@ -1,34 +1,15 @@
-
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from textwrap import dedent
 from data.models.state import TicketState
 
-
-def _stub(name: str):
-    """Returns a callable stub that identifies itself clearly."""
-    def stub_fn(*args, **kwargs):
-        return f"[STUB] Tool '{name}' not yet implemented. Args: {args} Kwargs: {kwargs}"
-    stub_fn.__name__ = name
-    return stub_fn
-
-update_ticket_status = _stub("update_ticket_status")
-send_response        = _stub("send_response")
-create_internal_note = _stub("create_internal_note")
-
-ESCALATION_TOOLS = [
+from agentic.tools.ticket_tools import (
     update_ticket_status,
     send_response,
     create_internal_note,
-]
+)
 
-
-# ─────────────────────────────────────────────
-# Structured Output Schema
-# Two outputs: one for the customer, one for the
-# internal human agent taking over.
-# ─────────────────────────────────────────────
 class EscalationOutput(BaseModel):
     escalation_reason: str = Field(
         description=(
@@ -65,10 +46,8 @@ class EscalationOutput(BaseModel):
         description="Brief internal reasoning for audit and debugging."
     )
 
-
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
 structured_llm = llm.with_structured_output(EscalationOutput)
-
 
 SYSTEM_PROMPT = """
 You are the Escalation Agent for UDA-Hub, an intelligent customer support system
@@ -91,7 +70,6 @@ Urgency escalation rules:
 - 'medium': reservation problem, subscription billing, unresolved complaint
 - 'low': general enquiry that needs human touch, unclear request
 """
-
 
 def _determine_escalation_trigger(state: TicketState) -> str:
     """
@@ -178,7 +156,6 @@ def run(state: TicketState) -> dict:
         ).strip()
     )
 
-    # ── Structured LLM escalation output ──
     result: EscalationOutput = structured_llm.invoke(
         [SystemMessage(content=SYSTEM_PROMPT), human_message]
     )
@@ -202,7 +179,6 @@ def run(state: TicketState) -> dict:
         role="system",
     )
 
-    # ── Build resolution for state ──
     resolution_update = {
         "action_taken": f"escalated — {result.escalation_reason}",
         "response_message": result.customer_message,
