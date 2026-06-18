@@ -46,7 +46,7 @@ class EscalationOutput(BaseModel):
         description="Brief internal reasoning for audit and debugging."
     )
 
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 structured_llm = llm.with_structured_output(EscalationOutput)
 
 SYSTEM_PROMPT = """
@@ -160,7 +160,6 @@ def run(state: TicketState) -> dict:
         [SystemMessage(content=SYSTEM_PROMPT), human_message]
     )
 
-    # ── Execute ticket tools ──
     update_ticket_status(
         ticket_id=ticket["ticket_id"],
         status="escalated",
@@ -187,10 +186,9 @@ def run(state: TicketState) -> dict:
             "send_response",
             "create_internal_note",
         ],
-        "resolved": False,  # Escalation never marks a ticket as resolved
+        "resolved": False, 
     }
 
-    # ── Log to message history ──
     log_message = AIMessage(
         content=(
             f"[Escalation] Ticket {ticket['ticket_id']} escalated — "
