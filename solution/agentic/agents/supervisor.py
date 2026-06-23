@@ -4,6 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from textwrap import dedent
 import os
 from data.models.state import TicketState, Classification
+from agentic.logging_config import log_routing_decision, log_workflow_start
 
 
 CONFIDENCE_THRESHOLD = 0.6
@@ -59,12 +60,41 @@ def route(state: TicketState) -> str:
     if not classification:
         return "classifier"
 
+    ticket_id = state.get("ticket", {}).get("ticket_id", "UNKNOWN")
+    
+    # Convert Classification to dict for logging
+    classification_dict = dict(classification) if classification else {}
+    
     if classification["issue_type"] in ESCALATION_ISSUE_TYPES:
+        log_routing_decision(
+            ticket_id,
+            "escalation",
+            classification_dict,
+            classification.get("confidence", 0),
+            CONFIDENCE_THRESHOLD,
+            f"Issue type '{classification['issue_type']}' requires escalation"
+        )
         return "escalation"
 
     if classification["confidence"] < CONFIDENCE_THRESHOLD:
+        log_routing_decision(
+            ticket_id,
+            "escalation",
+            classification_dict,
+            classification.get("confidence", 0),
+            CONFIDENCE_THRESHOLD,
+            f"Confidence {classification['confidence']:.2f} below threshold {CONFIDENCE_THRESHOLD}"
+        )
         return "escalation"
 
+    log_routing_decision(
+        ticket_id,
+        "resolver",
+        classification_dict,
+        classification.get("confidence", 0),
+        CONFIDENCE_THRESHOLD,
+        "Standard resolution attempt"
+    )
     return "resolver"
 
 
@@ -83,7 +113,10 @@ async def run(state: TicketState) -> dict:
     """
     ticket = state["ticket"]
     classification = state.get("classification")
-
+    
+    # Log workflow start on first pass
+    if not classification:
+        log_workflow_start(ticket["ticket_id"], ticket["channel"])
 
     if not classification:
         system_prompt = SystemMessage(content=FIRST_PASS_SYSTEM_PROMPT)

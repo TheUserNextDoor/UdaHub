@@ -13,6 +13,14 @@ from agentic.tools.ticket_tools import (
     create_internal_note,
     update_long_term_memory,
 )
+from agentic.logging_config import (
+    log_tool_call,
+    log_tool_result,
+    log_resolution_attempt,
+    log_resolution_success,
+    log_resolution_failed,
+    log_workflow_end
+)
 
 
 class ResolutionOutput(BaseModel):
@@ -103,6 +111,7 @@ def _gather_context(state: TicketState) -> dict:
     classification = state["classification"]
     intent = classification["intent"]
     issue_type = classification["issue_type"]
+    ticket_id = ticket["ticket_id"]
 
     context = {
         "kb_results": "",
@@ -112,27 +121,33 @@ def _gather_context(state: TicketState) -> dict:
     }
 
     # Always search the knowledge base
+    log_tool_call(ticket_id, "search_knowledge_base", {"query": ticket["latest_message"], "top_k": 3})
     kb_result = search_knowledge_base(
         query=ticket["latest_message"],
         account_id=ticket["account_id"],
         top_k=3,
     )
+    log_tool_result(ticket_id, "search_knowledge_base", "success", "Retrieved knowledge base articles")
     context["kb_results"] = kb_result
     context["tools_called"].append("search_knowledge_base")
 
     # Look up customer for account/subscription/reservation issues
     if issue_type in {"reservation", "subscription", "refund", "account", "billing", "experience"}:
+        log_tool_call(ticket_id, "lookup_customer", {"external_user_id": ticket["external_user_id"]})
         customer = lookup_customer(
             external_user_id=ticket["external_user_id"],
             account_id=ticket["account_id"],
         )
+        log_tool_result(ticket_id, "lookup_customer", "success", "Retrieved customer profile")
         context["customer_profile"] = customer
         context["tools_called"].append("lookup_customer")
 
     if issue_type in {"reservation", "refund"} or "reservation" in intent:
+        log_tool_call(ticket_id, "lookup_reservation", {"external_user_id": ticket["external_user_id"]})
         reservation = lookup_reservation(
             external_user_id=ticket["external_user_id"],
         )
+        log_tool_result(ticket_id, "lookup_reservation", "success", "Retrieved reservation details")
         context["reservation_details"] = reservation
         context["tools_called"].append("lookup_reservation")
 
@@ -205,28 +220,45 @@ async def run(state: TicketState) -> dict:
         [SystemMessage(content=SYSTEM_PROMPT), human_message]
     )
 
+    # Log resolution attempt
+    log_resolution_attempt(ticket["ticket_id"], classification["issue_type"])
+
     if result.resolved:
+        log_tool_call(ticket["ticket_id"], "update_ticket_status", {"status": "resolved"})
         await update_ticket_status(
             ticket_id=ticket["ticket_id"],
             status="resolved",
         )
+        log_tool_result(ticket["ticket_id"], "update_ticket_status", "success")
+        
         # Send response to customer
+        log_tool_call(ticket["ticket_id"], "send_response", {"content_length": len(result.response_message)})
         await send_response(
             ticket_id=ticket["ticket_id"],
             content=result.response_message,
         )
+        log_tool_result(ticket["ticket_id"], "send_response", "success")
+        
         # Update long-term memory with this resolution
+        log_tool_call(ticket["ticket_id"], "update_long_term_memory", {"issue_type": classification["issue_type"]})
         await update_long_term_memory(
             external_user_id=ticket["external_user_id"],
             resolution_summary=result.action_taken,
             issue_type=classification["issue_type"],
         )
+        log_tool_result(ticket["ticket_id"], "update_long_term_memory", "success")
 
         gathered["tools_called"].extend([
             "update_ticket_status",
             "send_response",
             "update_long_term_memory",
         ])
+        
+        # Log successful resolution
+        log_resolution_success(ticket["ticket_id"], result.action_taken, result.confidence)
+    else:
+        # Log failed resolution
+        log_resolution_failed(ticket["ticket_id"], "Resolver could not confidently act")
 
     resolution = {
         "action_taken": result.action_taken,
@@ -246,6 +278,10 @@ async def run(state: TicketState) -> dict:
         ),
         name="resolver",
     )
+    
+    # Log workflow end if resolved
+    if result.resolved:
+        log_workflow_end(ticket["ticket_id"], "resolved")
 
     return {
         "resolution": resolution,

@@ -2,6 +2,7 @@ fastmcp>=2.10.6
 httpx>=0.28.1
 ipykernel>=6.30.0
 langchain>=0.3.27
+langchain-chroma>=0.4.24
 langchain-core>=0.3.72
 langchain-mcp-adapters>=0.1.9
 langchain-openai>=0.3.28

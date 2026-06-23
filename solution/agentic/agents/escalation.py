@@ -10,6 +10,12 @@ from agentic.tools.ticket_tools import (
     send_response,
     create_internal_note,
 )
+from agentic.logging_config import (
+    log_tool_call,
+    log_tool_result,
+    log_escalation,
+    log_workflow_end
+)
 
 class EscalationOutput(BaseModel):
     escalation_reason: str = Field(
@@ -165,23 +171,44 @@ async def run(state: TicketState) -> dict:
         [SystemMessage(content=SYSTEM_PROMPT), human_message]
     )
 
+    ticket_id = ticket["ticket_id"]
+    classification = state.get("classification", {})
+    
+    # Log escalation event
+    log_escalation(
+        ticket_id,
+        classification.get("issue_type", "unknown") if classification else "unknown",
+        classification.get("urgency", "medium") if classification else "medium",
+        result.escalation_reason
+    )
+
+    # Execute escalation actions via tools
+    log_tool_call(ticket_id, "update_ticket_status", {"status": "escalated", "urgency": result.urgency_flag})
     await update_ticket_status(
-        ticket_id=ticket["ticket_id"],
+        ticket_id=ticket_id,
         status="escalated",
         urgency=result.urgency_flag,
     )
+    log_tool_result(ticket_id, "update_ticket_status", "success")
 
+    log_tool_call(ticket_id, "send_response", {"content_length": len(result.customer_message)})
     await send_response(
-        ticket_id=ticket["ticket_id"],
+        ticket_id=ticket_id,
         content=result.customer_message,
         role="agent",
     )
+    log_tool_result(ticket_id, "send_response", "success")
 
+    log_tool_call(ticket_id, "create_internal_note", {"urgency": result.urgency_flag})
     await create_internal_note(
-        ticket_id=ticket["ticket_id"],
+        ticket_id=ticket_id,
         content=result.internal_note,
         role="system",
     )
+    log_tool_result(ticket_id, "create_internal_note", "success")
+    
+    # Log workflow end
+    log_workflow_end(ticket_id, "escalated")
 
     resolution_update = {
         "action_taken": f"escalated — {result.escalation_reason}",

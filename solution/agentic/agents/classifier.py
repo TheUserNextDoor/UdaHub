@@ -4,6 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from textwrap import dedent
 from data.models.state import TicketState
 import os
+from agentic.logging_config import log_classification, log_workflow_start
 
 
 class ClassificationOutput(BaseModel):
@@ -141,6 +142,15 @@ async def run(state: TicketState) -> dict:
         "intent": result.intent,
         "confidence": result.confidence,
     }
+
+    # Log classification decision
+    log_classification(ticket["ticket_id"], {
+        "issue_type": result.issue_type,
+        "urgency": result.urgency,
+        "intent": result.intent,
+        "confidence": result.confidence,
+        "reasoning": result.reasoning
+    })
 
     confirmation = HumanMessage(
         content=(
