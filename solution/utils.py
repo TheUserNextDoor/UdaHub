@@ -9,6 +9,7 @@ from langchain_core.messages import (
     HumanMessage, 
 )
 from langgraph.graph.state import CompiledStateGraph
+from langchain_core.runnables import RunnableConfig
 
 
 Base = declarative_base()
@@ -48,7 +49,7 @@ def model_to_dict(instance):
         for column in instance.__table__.columns
     }
 
-def chat_interface(agent:CompiledStateGraph, ticket_id:str):
+async def chat_interface(agent: CompiledStateGraph, ticket_id: str):
     is_first_iteration = False
     messages = [SystemMessage(content = f"ThreadId: {ticket_id}")]
     while True:
@@ -63,12 +64,12 @@ def chat_interface(agent:CompiledStateGraph, ticket_id:str):
         trigger = {
             "messages": messages
         }
-        config = {
+        config: RunnableConfig = {
             "configurable": {
                 "thread_id": ticket_id,
             }
         }
         
-        result = agent.invoke(input=trigger, config=config)
+        result = await agent.ainvoke(input=trigger, config=config)
         print("Assistant:", result["messages"][-1].content)
         is_first_iteration = False

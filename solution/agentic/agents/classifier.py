@@ -3,6 +3,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from textwrap import dedent
 from data.models.state import TicketState
+import os
 
 
 class ClassificationOutput(BaseModel):
@@ -45,7 +46,12 @@ class ClassificationOutput(BaseModel):
     )
 
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini",
+                temperature=0,
+                base_url="https://openai.vocareum.com/v1",
+                api_key=os.getenv("VOCAREUM_KEY")
+                )
+
 structured_llm = llm.with_structured_output(ClassificationOutput)
 
 
@@ -73,9 +79,9 @@ Classification rules:
 """
 
 
-def run(state: TicketState) -> dict:
+async def run(state: TicketState) -> dict:
     """
-    Classifier node function.
+    Classifier node function (async).
 
     Reads the ticket from state, runs structured LLM classification,
     and returns the classification to be merged into state.

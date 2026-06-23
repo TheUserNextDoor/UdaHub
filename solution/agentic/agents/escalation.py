@@ -3,6 +3,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from textwrap import dedent
 from data.models.state import TicketState
+import os
 
 from agentic.tools.ticket_tools import (
     update_ticket_status,
@@ -46,7 +47,11 @@ class EscalationOutput(BaseModel):
         description="Brief internal reasoning for audit and debugging."
     )
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini",
+                temperature=0,
+                base_url="https://openai.vocareum.com/v1",
+                api_key=os.getenv("VOCAREUM_KEY")
+                )
 structured_llm = llm.with_structured_output(EscalationOutput)
 
 SYSTEM_PROMPT = """
@@ -92,9 +97,9 @@ def _determine_escalation_trigger(state: TicketState) -> str:
     return "Escalation triggered by Supervisor routing decision"
 
 
-def run(state: TicketState) -> dict:
+async def run(state: TicketState) -> dict:
     """
-    Escalation node function.
+    Escalation node function (async).
 
     1. Determines why escalation was triggered
     2. Assembles all available context from state
@@ -160,19 +165,19 @@ def run(state: TicketState) -> dict:
         [SystemMessage(content=SYSTEM_PROMPT), human_message]
     )
 
-    update_ticket_status(
+    await update_ticket_status(
         ticket_id=ticket["ticket_id"],
         status="escalated",
         urgency=result.urgency_flag,
     )
 
-    send_response(
+    await send_response(
         ticket_id=ticket["ticket_id"],
         content=result.customer_message,
         role="agent",
     )
 
-    create_internal_note(
+    await create_internal_note(
         ticket_id=ticket["ticket_id"],
         content=result.internal_note,
         role="system",

@@ -15,7 +15,11 @@ ESCALATION_ISSUE_TYPES = {
     "data_breach",
 }
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=os.getenv("VOCAREUM_KEY"))
+llm = ChatOpenAI(model="gpt-4o-mini",
+                temperature=0,
+                base_url="https://openai.vocareum.com/v1",
+                api_key=os.getenv("VOCAREUM_KEY")
+                )
 
 
 FIRST_PASS_SYSTEM_PROMPT = dedent(
@@ -64,9 +68,9 @@ def route(state: TicketState) -> str:
     return "resolver"
 
 
-def run(state: TicketState) -> dict:
+async def run(state: TicketState) -> dict:
     """
-    Supervisor node function.
+    Supervisor node function (async).
 
     On first pass (no classification yet): primes the state with a
     brief LLM assessment and sets next_agent = "classifier".

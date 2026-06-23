@@ -1,3 +1,4 @@
+import os
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from textwrap import dedent
@@ -55,7 +56,11 @@ class ResolutionOutput(BaseModel):
 
 
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini",
+                temperature=0,
+                base_url="https://openai.vocareum.com/v1",
+                api_key=os.getenv("VOCAREUM_KEY")
+                )
 structured_llm = llm.with_structured_output(ResolutionOutput)
 
 SYSTEM_PROMPT = """
@@ -135,9 +140,9 @@ def _gather_context(state: TicketState) -> dict:
 
 
 
-def run(state: TicketState) -> dict:
+async def run(state: TicketState) -> dict:
     """
-    Resolver node function.
+    Resolver node function (async).
 
     1. Gathers context via tools (stubs for now)
     2. Builds a rich prompt with all available context
@@ -201,17 +206,17 @@ def run(state: TicketState) -> dict:
     )
 
     if result.resolved:
-        update_ticket_status(
+        await update_ticket_status(
             ticket_id=ticket["ticket_id"],
             status="resolved",
         )
         # Send response to customer
-        send_response(
+        await send_response(
             ticket_id=ticket["ticket_id"],
             content=result.response_message,
         )
         # Update long-term memory with this resolution
-        update_long_term_memory(
+        await update_long_term_memory(
             external_user_id=ticket["external_user_id"],
             resolution_summary=result.action_taken,
             issue_type=classification["issue_type"],
