@@ -61,6 +61,13 @@ class ResolutionOutput(BaseModel):
     reasoning: str = Field(
         description="Brief internal reasoning for the resolution decision. For audit/debug."
     )
+    kb_sources_used: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of KB article titles used to justify the response. "
+            "Must be selected from the retrieved KB results when resolved=True."
+        )
+    )
 
 
 
@@ -100,7 +107,7 @@ Escalate (resolved=False) when:
 - Request is outside your tool capabilities
 """
 
-def _gather_context(state: TicketState) -> dict:
+async def _gather_context(state: TicketState) -> dict:
     """
     Calls relevant tools based on the classification intent
     to gather context before the LLM reasons.
@@ -108,7 +115,14 @@ def _gather_context(state: TicketState) -> dict:
     Returns a dict of gathered context strings.
     """
     ticket = state["ticket"]
-    classification = state["classification"]
+    classification = state.get("classification")
+    if not classification:
+        return {
+            "kb_results": "",
+            "customer_profile": "",
+            "reservation_details": "",
+            "tools_called": [],
+        }
     intent = classification["intent"]
     issue_type = classification["issue_type"]
     ticket_id = ticket["ticket_id"]
@@ -122,7 +136,7 @@ def _gather_context(state: TicketState) -> dict:
 
     # Always search the knowledge base
     log_tool_call(ticket_id, "search_knowledge_base", {"query": ticket["latest_message"], "top_k": 3})
-    kb_result = search_knowledge_base(
+    kb_result = await search_knowledge_base(
         query=ticket["latest_message"],
         account_id=ticket["account_id"],
         top_k=3,
@@ -134,9 +148,8 @@ def _gather_context(state: TicketState) -> dict:
     # Look up customer for account/subscription/reservation issues
     if issue_type in {"reservation", "subscription", "refund", "account", "billing", "experience"}:
         log_tool_call(ticket_id, "lookup_customer", {"external_user_id": ticket["external_user_id"]})
-        customer = lookup_customer(
+        customer = await lookup_customer(
             external_user_id=ticket["external_user_id"],
-            account_id=ticket["account_id"],
         )
         log_tool_result(ticket_id, "lookup_customer", "success", "Retrieved customer profile")
         context["customer_profile"] = customer
@@ -144,7 +157,7 @@ def _gather_context(state: TicketState) -> dict:
 
     if issue_type in {"reservation", "refund"} or "reservation" in intent:
         log_tool_call(ticket_id, "lookup_reservation", {"external_user_id": ticket["external_user_id"]})
-        reservation = lookup_reservation(
+        reservation = await lookup_reservation(
             external_user_id=ticket["external_user_id"],
         )
         log_tool_result(ticket_id, "lookup_reservation", "success", "Retrieved reservation details")
@@ -170,12 +183,64 @@ async def run(state: TicketState) -> dict:
         'retrieved_context', and 'messages'.
     """
     ticket = state["ticket"]
-    classification = state["classification"]
+    classification = state.get("classification")
+    if not classification:
+        log_resolution_failed(ticket["ticket_id"], "Missing classification in state")
+        resolution = {
+            "action_taken": "cannot_resolve",
+            "response_message": "Unable to classify this request confidently. Escalating to human support.",
+            "tool_calls_made": [],
+            "resolved": False,
+        }
+        return {
+            "resolution": resolution,
+            "retrieved_context": [],
+            "messages": [
+                AIMessage(
+                    content=f"[Resolver] Ticket {ticket['ticket_id']} — action: cannot_resolve | resolved: False | confidence: 0.00 | reasoning: Missing classification",
+                    name="resolver",
+                )
+            ],
+            "next_agent": "escalation",
+        }
     short_term = state.get("short_term_memory", {})
     long_term = state.get("long_term_memory", {})
 
     # ── Step 1: Gather context via tools ──
-    gathered = _gather_context(state)
+    gathered = await _gather_context(state)
+
+    kb_total_found = 0
+    if isinstance(gathered.get("kb_results"), dict):
+        kb_total_found = int(gathered["kb_results"].get("total_found", 0) or 0)
+
+    # Deterministic escalation rule when no relevant KB articles are found.
+    if kb_total_found == 0:
+        log_resolution_failed(ticket["ticket_id"], "No relevant knowledge base article found")
+
+        resolution = {
+            "action_taken": "cannot_resolve",
+            "response_message": (
+                "I could not find relevant knowledge base guidance for this request. "
+                "I am escalating this ticket to a human support specialist."
+            ),
+            "tool_calls_made": gathered["tools_called"],
+            "resolved": False,
+        }
+
+        log_message = AIMessage(
+            content=(
+                f"[Resolver] Ticket {ticket['ticket_id']} — action: cannot_resolve | "
+                "resolved: False | confidence: 0.00 | reasoning: No KB article found"
+            ),
+            name="resolver",
+        )
+
+        return {
+            "resolution": resolution,
+            "retrieved_context": [],
+            "messages": [log_message],
+            "next_agent": "escalation",
+        }
 
     # ── Step 2: Build prompt ──
     human_message = HumanMessage(
@@ -203,6 +268,11 @@ async def run(state: TicketState) -> dict:
             --- KNOWLEDGE BASE RESULTS ---
             {gathered['kb_results'] or 'No relevant articles found'}
 
+            IMPORTANT GROUNDING RULE:
+            - Any resolved response must be grounded in the retrieved knowledge base results.
+            - You must populate kb_sources_used with one or more article titles from the KB results.
+            - If no KB article can support the answer, set resolved=False and action_taken='cannot_resolve'.
+
             --- CONVERSATION HISTORY (this session) ---
             {short_term.get('prior_turns', 'No prior turns')}
 
@@ -216,11 +286,38 @@ async def run(state: TicketState) -> dict:
         ).strip()
     )
 
-    result: ResolutionOutput = structured_llm.invoke(
-        [SystemMessage(content=SYSTEM_PROMPT), human_message]
-    )
+    raw_result = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), human_message])
+    result = raw_result if isinstance(raw_result, ResolutionOutput) else ResolutionOutput(**raw_result)
 
-    # Log resolution attempt
+    kb_results_payload = gathered.get("kb_results") if isinstance(gathered.get("kb_results"), dict) else {}
+    kb_articles = kb_results_payload.get("results", []) if isinstance(kb_results_payload, dict) else []
+    available_titles = {
+        article.get("title", "").strip()
+        for article in kb_articles
+        if isinstance(article, dict) and article.get("title")
+    }
+    cited_sources = [src.strip() for src in result.kb_sources_used if src and src.strip()]
+    valid_cited_sources = [src for src in cited_sources if src in available_titles]
+
+    if result.resolved and not valid_cited_sources:
+        result = ResolutionOutput(
+            action_taken="cannot_resolve",
+            response_message=(
+                "I could not confidently ground this answer in the knowledge base. "
+                "I am escalating this ticket to a human support specialist."
+            ),
+            tool_calls_made=result.tool_calls_made,
+            resolved=False,
+            confidence=0.0,
+            reasoning="Resolved response rejected because no valid KB source citation was provided.",
+            kb_sources_used=[],
+        )
+
+    if result.resolved and valid_cited_sources:
+        sources_line = "\nSources: " + ", ".join(valid_cited_sources)
+        if sources_line not in result.response_message:
+            result.response_message = f"{result.response_message}{sources_line}"
+
     log_resolution_attempt(ticket["ticket_id"], classification["issue_type"])
 
     if result.resolved:
@@ -231,7 +328,6 @@ async def run(state: TicketState) -> dict:
         )
         log_tool_result(ticket["ticket_id"], "update_ticket_status", "success")
         
-        # Send response to customer
         log_tool_call(ticket["ticket_id"], "send_response", {"content_length": len(result.response_message)})
         await send_response(
             ticket_id=ticket["ticket_id"],
@@ -239,7 +335,6 @@ async def run(state: TicketState) -> dict:
         )
         log_tool_result(ticket["ticket_id"], "send_response", "success")
         
-        # Update long-term memory with this resolution
         log_tool_call(ticket["ticket_id"], "update_long_term_memory", {"issue_type": classification["issue_type"]})
         await update_long_term_memory(
             external_user_id=ticket["external_user_id"],

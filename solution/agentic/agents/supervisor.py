@@ -8,6 +8,7 @@ from agentic.logging_config import log_routing_decision, log_workflow_start
 
 
 CONFIDENCE_THRESHOLD = 0.6
+HIGH_URGENCY_LEVEL = "high"
 
 ESCALATION_ISSUE_TYPES = {
     "legal",
@@ -60,9 +61,11 @@ def route(state: TicketState) -> str:
     if not classification:
         return "classifier"
 
+    ticket = state.get("ticket", {})
+    channel = ticket.get("channel", "")
+
     ticket_id = state.get("ticket", {}).get("ticket_id", "UNKNOWN")
     
-    # Convert Classification to dict for logging
     classification_dict = dict(classification) if classification else {}
     
     if classification["issue_type"] in ESCALATION_ISSUE_TYPES:
@@ -73,6 +76,28 @@ def route(state: TicketState) -> str:
             classification.get("confidence", 0),
             CONFIDENCE_THRESHOLD,
             f"Issue type '{classification['issue_type']}' requires escalation"
+        )
+        return "escalation"
+
+    if classification.get("urgency") == HIGH_URGENCY_LEVEL:
+        log_routing_decision(
+            ticket_id,
+            "escalation",
+            classification_dict,
+            classification.get("confidence", 0),
+            CONFIDENCE_THRESHOLD,
+            "High urgency ticket requires escalation"
+        )
+        return "escalation"
+
+    if channel == "phone" and classification.get("urgency") in {"medium", "high"}:
+        log_routing_decision(
+            ticket_id,
+            "escalation",
+            classification_dict,
+            classification.get("confidence", 0),
+            CONFIDENCE_THRESHOLD,
+            "Phone channel with medium/high urgency requires escalation"
         )
         return "escalation"
 
@@ -114,7 +139,6 @@ async def run(state: TicketState) -> dict:
     ticket = state["ticket"]
     classification = state.get("classification")
     
-    # Log workflow start on first pass
     if not classification:
         log_workflow_start(ticket["ticket_id"], ticket["channel"])
 

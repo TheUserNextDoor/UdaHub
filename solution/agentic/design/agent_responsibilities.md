@@ -90,7 +90,6 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 | `issue_refund` | cultpass.db | explicit refund request + active subscription + reservation exists |
 | `update_ticket_status` | udahub.db | on resolved=True only |
 | `send_response` | udahub.db | on resolved=True only |
-| `create_internal_note` | udahub.db | on resolved=True only |
 | `update_long_term_memory` | memory store | on resolved=True only |
 
 **Reads from state:**
