@@ -1,6 +1,7 @@
 from typing import Annotated, Any, Optional
 from typing_extensions import TypedDict
 from langgraph.graph.message import add_messages
+from operator import add
 
 
 class TicketInput(TypedDict):
@@ -43,6 +44,7 @@ class Resolution(TypedDict):
 class TicketState(TypedDict):
     ticket: TicketInput
     messages: Annotated[list[Any], add_messages]
+    tool_usage: Annotated[list[str], add]
 
     classification: Optional[Classification]       
     customer_context: Optional[CustomerContext]     

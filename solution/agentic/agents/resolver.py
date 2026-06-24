@@ -195,6 +195,7 @@ async def run(state: TicketState) -> dict:
         return {
             "resolution": resolution,
             "retrieved_context": [],
+            "tool_usage": [],
             "messages": [
                 AIMessage(
                     content=f"[Resolver] Ticket {ticket['ticket_id']} — action: cannot_resolve | resolved: False | confidence: 0.00 | reasoning: Missing classification",
@@ -238,6 +239,7 @@ async def run(state: TicketState) -> dict:
         return {
             "resolution": resolution,
             "retrieved_context": [],
+            "tool_usage": gathered["tools_called"],
             "messages": [log_message],
             "next_agent": "escalation",
         }
@@ -381,6 +383,7 @@ async def run(state: TicketState) -> dict:
     return {
         "resolution": resolution,
         "retrieved_context": [gathered["kb_results"]] if gathered["kb_results"] else [],
+        "tool_usage": resolution["tool_calls_made"],
         "messages": [log_message],
         "next_agent": "end" if result.resolved else "escalation",
     }

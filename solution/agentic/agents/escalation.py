@@ -233,6 +233,7 @@ async def run(state: TicketState) -> dict:
 
     return {
         "resolution": resolution_update,
+        "tool_usage": resolution_update["tool_calls_made"],
         "next_agent": "end",
         "messages": [log_message],
     }

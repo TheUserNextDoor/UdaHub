@@ -4,11 +4,30 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 
 ---
 
+## Memory Hydration Node
+
+**File:** `agentic/workflow.py` (`hydrate_memory`)
+
+**Role:** Pre-routing memory adapter. Runs before Supervisor and after Classifier to refresh memory context.
+
+**Tools:**
+- `get_long_term_memory` (via MCP client) — fetches persistent customer history by `external_user_id`
+
+**Reads from state:**
+- `messages` — used to build compact short-term history
+- `ticket.external_user_id` — scope key for long-term memory retrieval
+
+**Writes to state:**
+- `short_term_memory.prior_turns` — compact conversation window (last N lines)
+- `long_term_memory` — `past_resolutions`, `past_issue_types`, `preferences`
+
+---
+
 ## Supervisor Agent
 
 **File:** `agentic/agents/supervisor.py`
 
-**Role:** Orchestration brain. Entry point for every ticket. Routes between agents based on state. Never resolves tickets itself.
+**Role:** Orchestration brain. Routes between agents based on hydrated state. Never resolves tickets itself.
 
 **Tools:** None
 
@@ -87,10 +106,9 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 | `search_knowledge_base` | ChromaDB (udahub) | Always — RAG retrieval |
 | `lookup_customer` | cultpass.db | account, subscription, refund, reservation, billing issues |
 | `lookup_reservation` | cultpass.db | reservation or refund intents |
-| `issue_refund` | cultpass.db | explicit refund request + active subscription + reservation exists |
 | `update_ticket_status` | udahub.db | on resolved=True only |
 | `send_response` | udahub.db | on resolved=True only |
-| `update_long_term_memory` | memory store | on resolved=True only |
+| `update_long_term_memory` | udahub.db (`customer_memory`) | on resolved=True only |
 
 **Reads from state:**
 - `ticket` — ticket and customer identifiers
@@ -102,6 +120,7 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 - `resolution` — action taken, response message, tools called, resolved flag
 - `customer_context` — CultPass profile fetched during execution
 - `retrieved_context` — RAG chunks returned from knowledge base
+- `tool_usage` — thread-scoped accumulated tool calls for inspection/audit
 - `next_agent` — "end" if resolved, "escalation" if not
 - `messages` — resolution log with reasoning
 
@@ -146,6 +165,7 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 
 **Writes to state:**
 - `resolution` — action: "escalated — {reason}", resolved: False (always)
+- `tool_usage` — escalation tool calls for thread-scoped inspection
 - `next_agent` — always "end"
 - `messages` — escalation log with reason and urgency
 
@@ -184,9 +204,13 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 ```
 START
   ↓
+Memory Hydration (short-term + long-term)
+  ↓
 Supervisor (pass 1) → acknowledges ticket → next_agent = "classifier"
   ↓
-Classifier → classifies ticket → loops back to Supervisor
+Classifier → classifies ticket
+  ↓
+Memory Hydration (refresh context)
   ↓
 Supervisor (pass 2) → evaluates classification → routes
   ↓                                               ↓

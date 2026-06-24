@@ -99,26 +99,31 @@ starter/
 
 ```
 1. Ticket arrives → initial TicketState assembled
-2. START → Supervisor (first pass)
+2. START → Memory Hydration
+   - Builds short-term memory from thread message history
+   - Loads long-term memory by `ticket.external_user_id`
+3. Memory → Supervisor (first pass)
    - Acknowledges ticket
    - Sets next_agent = "classifier"
-3. Supervisor → Classifier
+4. Supervisor → Classifier
    - Classifies issue_type, urgency, intent, confidence
    - Writes state["classification"]
-4. Classifier → Supervisor (second pass)
-   - Reads classification
+5. Classifier → Memory Hydration → Supervisor (second pass)
+   - Refreshes memory context before routing decision
    - Routes: confidence ≥ 0.6 + non-sensitive → "resolver"
    - Routes: confidence < 0.6 or sensitive type → "escalation"
-5a. Supervisor → Resolver
+6a. Supervisor → Resolver
    - Gathers context: RAG search + customer lookup + reservation lookup
    - Reasons over all context
    - Executes action tools if confident
+   - Writes `tool_usage` for thread-scoped inspection
    - Sets resolved=True → END
    - Sets resolved=False → next_agent = "escalation"
-5b. Supervisor → Escalation
+6b. Supervisor → Escalation
    - Determines escalation trigger
    - Produces customer-facing message + internal briefing note
    - Updates ticket status to "escalated"
+   - Writes `tool_usage` for thread-scoped inspection
    - Always sets resolved=False → END
 ```
 
@@ -132,12 +137,13 @@ The shared `TicketState` object flows through every node. Each agent reads from 
 |---|---|---|
 | `ticket` | `TicketInput` | Ingestion (before graph runs) |
 | `messages` | `list` (append-only) | All agents |
+| `tool_usage` | `list[str]` (append-only) | Resolver / Escalation |
 | `classification` | `Classification` | Classifier |
 | `customer_context` | `CustomerContext` | Resolver |
 | `resolution` | `Resolution` | Resolver / Escalation |
 | `next_agent` | `str` | Supervisor / Resolver |
-| `short_term_memory` | `dict` | Injected pre-run |
-| `long_term_memory` | `dict` | Injected pre-run, updated post-run |
+| `short_term_memory` | `dict` | Memory Hydration node |
+| `long_term_memory` | `dict` | Memory Hydration node + Resolver update path |
 | `retrieved_context` | `list[str]` | Resolver (RAG) |
 | `error` | `str` | Any agent on failure |
 
@@ -147,15 +153,16 @@ The shared `TicketState` object flows through every node. Each agent reads from 
 
 ### Short-term memory
 - Scoped to a single ticket session
-- Managed by LangGraph `MemorySaver` checkpointer
-- Stores conversation turns within the same session
-- Keyed by `thread_id` (defaults to `ticket_id`)
+- Backed by LangGraph `MemorySaver` checkpointer + `thread_id`
+- Materialized by the Memory Hydration node into `short_term_memory.prior_turns`
+- Uses a compact rolling window of recent turns to keep prompts bounded
 
 ### Long-term memory
-- Persists across sessions
+- Persists across sessions in `udahub.db` (`customer_memory`)
 - Stores: user preferences, past issue types, past resolutions
-- Read at graph entry, written by Resolver on successful resolution
-- Enables better classification and resolution for returning customers
+- Loaded by Memory Hydration using `external_user_id`
+- Written by Resolver on successful resolution (`update_long_term_memory`)
+- Used by Classifier, Resolver, and Escalation prompts for personalization
 
 ---
 
@@ -178,10 +185,10 @@ udahub.db / cultpass.db / ChromaDB
 | `search_knowledge_base` | | | ✓ | |
 | `lookup_customer` | | | ✓ | |
 | `lookup_reservation` | | | ✓ | |
-| `issue_refund` | | | ✓ | |
+| `issue_refund` | | | available | |
 | `update_ticket_status` | | | ✓ | ✓ |
 | `send_response` | | | ✓ | ✓ |
-| `create_internal_note` | | | ✓ | ✓ |
+| `create_internal_note` | | | | ✓ |
 | `update_long_term_memory` | | | ✓ | |
 
 ---
