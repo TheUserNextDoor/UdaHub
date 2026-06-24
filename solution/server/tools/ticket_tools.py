@@ -1,10 +1,10 @@
 import uuid
+import json
 from fastmcp import FastMCP
 from server.dependencies import get_udahub_db
-from data.models.udahub import Ticket, TicketMetadata, TicketMessage, RoleEnum
+from data.models.udahub import Ticket, TicketMetadata, TicketMessage, RoleEnum, CustomerMemory
 
 mcp = FastMCP("ticket-tools")
-_long_term_memory_store: dict[str, dict] = {}
 
 
 @mcp.tool()
@@ -161,27 +161,53 @@ def update_long_term_memory(
     Returns:
         dict confirming the memory update.
     """
-    user_memory = _long_term_memory_store.get(external_user_id, {
-        "past_resolutions": [],
-        "past_issue_types": [],
-        "preferences":      {},
-    })
-
-    user_memory["past_resolutions"].append(resolution_summary)
-
-    if issue_type not in user_memory["past_issue_types"]:
-        user_memory["past_issue_types"].append(issue_type)
-
-    if preferences:
-        user_memory["preferences"].update(preferences)
-
-    _long_term_memory_store[external_user_id] = user_memory
-
-    return {
-        "success":          True,
-        "external_user_id": external_user_id,
-        "message":          f"Memory updated for user '{external_user_id}'.",
-    }
+    with get_udahub_db() as db:
+        # Use default account for now
+        account_id = "cultpass"
+        
+        memory = db.query(CustomerMemory).filter(
+            CustomerMemory.account_id == account_id,
+            CustomerMemory.external_user_id == external_user_id
+        ).first()
+        
+        if not memory:
+            memory = CustomerMemory(
+                memory_id=str(uuid.uuid4()),
+                account_id=account_id,
+                external_user_id=external_user_id,
+                past_resolutions="[]",
+                past_issue_types="[]",
+                preferences="{}"
+            )
+            db.add(memory)
+        
+        resolutions_json = str(memory.past_resolutions) if memory.past_resolutions is not None else "[]"
+        issue_types_json = str(memory.past_issue_types) if memory.past_issue_types is not None else "[]"
+        preferences_json = str(memory.preferences) if memory.preferences is not None else "{}"
+        
+        past_resolutions = json.loads(resolutions_json)
+        past_issue_types = json.loads(issue_types_json)
+        user_preferences = json.loads(preferences_json)
+        
+        past_resolutions.append(resolution_summary)
+        
+        if issue_type not in past_issue_types:
+            past_issue_types.append(issue_type)
+        
+        if preferences:
+            user_preferences.update(preferences)
+        
+        memory.past_resolutions = json.dumps(past_resolutions)
+        memory.past_issue_types = json.dumps(past_issue_types)
+        memory.preferences = json.dumps(user_preferences)
+        
+        db.commit()
+        
+        return {
+            "success":          True,
+            "external_user_id": external_user_id,
+            "message":          f"Memory updated for user '{external_user_id}' and persisted to database.",
+        }
 
 
 @mcp.tool()
@@ -196,8 +222,23 @@ def get_long_term_memory(external_user_id: str) -> dict:
     Returns:
         dict with past_resolutions, past_issue_types, and preferences.
     """
-    return _long_term_memory_store.get(external_user_id, {
-        "past_resolutions": [],
-        "past_issue_types": [],
-        "preferences":      {},
-    })
+    with get_udahub_db() as db:
+        account_id = "cultpass"
+        
+        memory = db.query(CustomerMemory).filter(
+            CustomerMemory.account_id == account_id,
+            CustomerMemory.external_user_id == external_user_id
+        ).first()
+        
+        if not memory:
+            return {
+                "past_resolutions": [],
+                "past_issue_types": [],
+                "preferences": {},
+            }
+        
+        return {
+            "past_resolutions": json.loads(str(memory.past_resolutions) if memory.past_resolutions is not None else "[]"),
+            "past_issue_types": json.loads(str(memory.past_issue_types) if memory.past_issue_types is not None else "[]"),
+            "preferences": json.loads(str(memory.preferences) if memory.preferences is not None else "{}"),
+        }
