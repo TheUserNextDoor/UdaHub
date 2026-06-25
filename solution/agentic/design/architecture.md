@@ -29,13 +29,17 @@ UDA-Hub connects to two databases:
 
 ```
 Incoming Ticket (text + metadata)
-         ↓
-    Supervisor Agent          ← orchestration brain, no tools
-         ↓
-    Classifier Agent          ← structured classification, no tools
-         ↓ (loops back to Supervisor)
+       ↓
+ Memory Hydration Node      ← builds short-term memory + loads long-term memory
+       ↓
+    Supervisor Agent        ← orchestration brain, no tools
+       ↓
+    Classifier Agent        ← structured classification, no tools
+       ↓
+ Memory Hydration Node      ← refreshes memory context after classification
+       ↓
     Supervisor Agent
-         ↓
+       ↓
    ┌─────┴──────┐
 Resolver      Escalation
   Agent          Agent
@@ -50,14 +54,14 @@ Resolver      Escalation
 | Layer | Technology |
 |---|---|
 | Agent orchestration | LangGraph |
-| LLM | OpenAI GPT-4o |
+| LLM | OpenAI GPT-4o-mini |
 | Structured output | Pydantic + `with_structured_output()` |
 | Embeddings | OpenAI `text-embedding-3-small` |
 | Vector store | ChromaDB (persisted to `data/core/chroma/`) |
 | Tool server | FastMCP + FastAPI |
 | ORM | SQLAlchemy |
 | Short-term memory | LangGraph `MemorySaver` (in-session checkpointing) |
-| Long-term memory | Persistent store (preferences, past resolutions) |
+| Long-term memory | `customer_memory` table in `udahub.db` |
 | Testing | pytest + RAGAS |
 
 ---
@@ -65,29 +69,26 @@ Resolver      Escalation
 ## Folder Structure
 
 ```
-starter/
+solution/
 ├── agentic/
 │   ├── agents/         ← agent node functions
 │   ├── tools/          ← MCP client wrappers
+│   ├── design/         ← architecture and responsibility docs
+│   ├── logging_config.py
 │   └── workflow.py     ← LangGraph graph assembly
 ├── data/
 │   ├── core/           ← udahub.db + ChromaDB vector store
-│   ├── external/       ← cultpass.db
+│   ├── external/       ← cultpass.db and seed data
 │   └── models/         ← SQLAlchemy models + LangGraph state schema
-├── docs/               ← architecture and documentation
 ├── server/
 │   ├── main.py         ← FastMCP + FastAPI entry point
-│   ├── routers/        ← tool endpoint implementations
+│   ├── tools/          ← tool endpoint implementations
 │   └── dependencies.py ← shared DB sessions
-├── tests/
-│   ├── test_agents/    ← unit tests per agent
-│   ├── test_tools/     ← tool unit tests
-│   ├── test_workflow.py← end-to-end graph tests
-│   └── evaluation/     ← RAGAS RAG quality evaluation
-├── .env
 ├── 01_external_db_setup.ipynb
 ├── 02_core_db_setup.ipynb
 ├── 03_agentic_app.ipynb
+├── README.md
+├── requirements.txt
 └── utils.py
 ```
 
@@ -110,8 +111,11 @@ starter/
    - Writes state["classification"]
 5. Classifier → Memory Hydration → Supervisor (second pass)
    - Refreshes memory context before routing decision
-   - Routes: confidence ≥ 0.6 + non-sensitive → "resolver"
-   - Routes: confidence < 0.6 or sensitive type → "escalation"
+   - Routes to escalation when issue type is sensitive
+   - Routes to escalation when urgency is high
+   - Routes to escalation for phone channel + medium/high urgency
+   - Routes to escalation when confidence < 0.6
+   - Otherwise routes to resolver
 6a. Supervisor → Resolver
    - Gathers context: RAG search + customer lookup + reservation lookup
    - Reasons over all context
@@ -173,7 +177,7 @@ Tools are exposed as MCP endpoints via a FastMCP + FastAPI server running locall
 ```
 Agent (agentic/tools/*.py — MCP client)
         ↓  HTTP / MCP protocol
-FastMCP Server (server/routers/*.py)
+FastMCP Server (server/tools/*.py)
         ↓  SQLAlchemy ORM
 udahub.db / cultpass.db / ChromaDB
 ```
@@ -185,7 +189,6 @@ udahub.db / cultpass.db / ChromaDB
 | `search_knowledge_base` | | | ✓ | |
 | `lookup_customer` | | | ✓ | |
 | `lookup_reservation` | | | ✓ | |
-| `issue_refund` | | | available | |
 | `update_ticket_status` | | | ✓ | ✓ |
 | `send_response` | | | ✓ | ✓ |
 | `create_internal_note` | | | | ✓ |
@@ -198,6 +201,8 @@ udahub.db / cultpass.db / ChromaDB
 | Trigger | Condition |
 |---|---|
 | Sensitive issue type | `issue_type` in `{legal, abuse, fraud, data_breach}` |
+| High urgency | `classification.urgency == "high"` |
+| Phone + urgency rule | `ticket.channel == "phone"` and urgency in `{medium, high}` |
 | Low confidence | `classification.confidence < 0.6` |
 | Resolver cannot act | `resolver.resolved = False` |
 
@@ -207,7 +212,7 @@ udahub.db / cultpass.db / ChromaDB
 
 ```env
 # LLM
-OPENAI_API_KEY=
+VOCAREUM_KEY=
 
 # Database paths
 UDAHUB_DB_PATH=data/core/udahub.db

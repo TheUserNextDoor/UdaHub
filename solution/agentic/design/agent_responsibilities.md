@@ -48,6 +48,8 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 | No classification yet | `classifier` |
 | Already resolved | `END` |
 | Sensitive issue type (legal, abuse, fraud, data_breach) | `escalation` |
+| High urgency (`urgency == high`) | `escalation` |
+| Phone channel + medium/high urgency | `escalation` |
 | `classification.confidence < 0.6` | `escalation` |
 | All other cases | `resolver` |
 
@@ -125,10 +127,10 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 - `messages` — resolution log with reasoning
 
 **Resolution rules:**
-- Issue refunds only when: explicitly requested AND subscription active AND reservation confirmed
-- Cancel reservations only when: explicitly requested AND status is confirmed
+- Always run KB retrieval first and require KB grounding for resolved responses
+- If no KB articles are found, deterministically set `resolved=False` and escalate
 - Never fabricate information — set `resolved=False` if context is missing
-- Escalate if: customer is blocked, refund is disputed, issue is outside tool capabilities
+- Escalate when the resolver cannot confidently act
 
 **Output schema:**
 
@@ -173,7 +175,9 @@ Quick reference for each agent's role, inputs, outputs, tools, and escalation be
 
 | Trigger | Source |
 |---|---|
-| Sensitive issue type | Supervisor detects before Classifier runs |
+| Sensitive issue type | Supervisor checks on second pass (after Classifier) |
+| High urgency | Supervisor checks `classification.urgency == high` |
+| Phone + urgency rule | Supervisor checks phone channel with medium/high urgency |
 | Low classifier confidence | Supervisor reads `classification.confidence < 0.6` |
 | Resolver cannot act | Resolver sets `resolved=False` |
 
