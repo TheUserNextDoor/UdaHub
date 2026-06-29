@@ -1,3 +1,5 @@
+import os
+
 from fastmcp import FastMCP
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
@@ -5,7 +7,10 @@ from server.dependencies import CHROMA_PATH
 
 mcp = FastMCP("kb-tools")
 
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+    api_key=lambda: os.environ["VOCAREUM_KEY"],
+)
 
 vectorstore = Chroma(
     persist_directory=f"{CHROMA_PATH}/knowledge",

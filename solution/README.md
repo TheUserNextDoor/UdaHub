@@ -44,7 +44,7 @@ sqlalchemy>=2.0.41
 
 4. **Start the MCP server** (in separate terminal):
    ```bash
-   python -m fastmcp run server/tools/
+   python -m server.main
    ```
    The server exposes tools for KB search, CRM queries, and ticket operations.
 
